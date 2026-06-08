@@ -1,6 +1,6 @@
 # Pokémon Data Pipeline & Dashboard
 
-An end-to-end data engineering portfolio project: fetch the complete Pokédex from a public REST API, model and persist it in a relational database, and explore the data through an interactive analytics dashboard.
+Built to demonstrate end-to-end data engineering skills — from rate-limited API ingestion and relational schema design through to interactive analytics. The pipeline fetches the complete Pokédex (1025 Pokémon, 102k+ move records) from a public REST API, models it across 10 relational tables in SQLite, and surfaces it through a multi-tab Streamlit dashboard with live sidebar filtering. The project is structured so each layer is independently testable: the fetch script, the ORM schema, the pandas analysis functions, and the dashboard are all separate concerns.
 
 **Stack:** Python · SQLite (SQLAlchemy ORM) · pandas · Streamlit · matplotlib · seaborn
 
@@ -60,7 +60,20 @@ Classification breakdown: Legendary = 71, Mythical = 23, Baby = 19, Stage 1 = 30
 
 ---
 
+## Key findings
+
+- **Strongest stat correlation: Defense & Sp. Def (r = 0.50)** — physically and specially defensive stats rise together, suggesting "wall"-archetype Pokémon are consistently bulky in both dimensions.
+- **Most independent pair: Speed & Defense (r = 0.01)** — fast Pokémon are no more likely to be physically defensive than slow ones, confirming the glass-cannon / tank split.
+- **Average off-diagonal r = 0.32** — stats are moderately correlated overall; Pokémon tend toward generalist profiles rather than extreme specialisation.
+- **Flying is almost never a primary type** — the grouped type chart reveals Flying has very few primary-type Pokémon but is one of the most common secondary types (Pidgey, Charizard, etc.).
+- **Generation V is the largest** — 156 Pokémon introduced, more than any other generation.
+
+---
+
 ## Dashboard
+
+![Dashboard screenshot](docs/screenshot.png)
+
 
 Run with:
 
@@ -84,16 +97,6 @@ venv\Scripts\streamlit.exe run app.py
 **Analysis** — lower-triangular Pearson correlation heatmap for the six base stats, computed from the current filter. Key findings displayed as metrics below the chart.
 
 **Pokémon Explorer** — searchable, sortable table of all Pokémon in the current filter. Selecting a Pokémon shows a full profile: sprite, type/gen metrics, stat bar chart, abilities with effect text, evolution chain with sprites, and move learnset grouped by learn method (Level Up, TM/HM, Egg, Tutor).
-
----
-
-## Key findings
-
-- **Strongest stat correlation: Defense & Sp. Def (r = 0.50)** — physically and specially defensive stats rise together, suggesting "wall"-archetype Pokémon are consistently bulky in both dimensions.
-- **Most independent pair: Speed & Defense (r = 0.01)** — fast Pokémon are no more likely to be physically defensive than slow ones, confirming the glass-cannon / tank split.
-- **Average off-diagonal r = 0.32** — stats are moderately correlated overall; Pokémon tend toward generalist profiles rather than extreme specialisation.
-- **Flying is almost never a primary type** — the grouped type chart reveals Flying has very few primary-type Pokémon but is one of the most common secondary types (Pidgey, Charizard, etc.).
-- **Generation V is the largest** — 156 Pokémon introduced, more than any other generation.
 
 ---
 
