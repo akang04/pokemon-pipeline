@@ -1,0 +1,23 @@
+# Virtual environment
+venv/
+
+# Database (regenerate with: python fetch.py)
+data/*.db
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Claude Code
+.claude/
