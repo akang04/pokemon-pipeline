@@ -96,7 +96,7 @@ venv\Scripts\streamlit.exe run app.py
 
 **Stats by Generation** — multi-stat line chart across generations with muted count bars on a secondary axis (labelled `n=XX`). An "All 6 stats" checkbox overrides the multiselect. Single-stat mode adds per-point value annotations.
 
-**Analysis** — lower-triangular Pearson correlation heatmap for the six base stats, computed from the current filter. Key findings displayed as metrics below the chart.
+**Analysis** — three sections: (1) lower-triangular Pearson correlation heatmap for the six base stats, with key findings as metrics; (2) Pearson r between physical dimensions (weight, height) and base stats; (3) **Legendary / Mythical vs. Standard** grouped bar chart comparing average stats for legendaries against any classification subset — the Classification sidebar filter controls which standard group is shown (e.g. Stage 3 only), while the Legendary/Mythical group is always fixed.
 
 **Pokémon Explorer** — searchable, sortable table of all Pokémon in the current filter. Selecting a Pokémon shows a full profile: sprite, type/gen metrics, stat bar chart, abilities with effect text, evolution chain with sprites, and move learnset grouped by learn method (Level Up, TM/HM, Egg, Tutor).
 

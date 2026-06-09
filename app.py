@@ -513,6 +513,73 @@ with tab_analysis:
             "weight is not a reliable proxy for power."
         )
 
+    st.markdown("### Legendary / Mythical vs. Standard Pokémon")
+    st.caption(
+        "Generation and Type filters apply. The Classification filter controls which Standard "
+        "Pokémon appear in the comparison — Legendary and Mythical are always the fixed group."
+    )
+
+    # Gen + Type filtered; Classification filter controls the Standard group only
+    legend_df = df_wide[
+        df_wide["generation_name"].isin(selected_gens)
+        & df_wide["type_1"].isin(selected_types)
+    ]
+
+    if legend_df.empty:
+        st.info("No data for the current filter selection.")
+    else:
+        is_leg = legend_df["classification"].isin(["Legendary", "Mythical"])
+        leg = legend_df[is_leg]
+
+        _non_leg_classes = [c for c in _CLASS_ORDER if c not in ("Legendary", "Mythical")]
+        std_classes = [c for c in selected_classes if c not in ("Legendary", "Mythical")]
+        std = legend_df[legend_df["classification"].isin(std_classes)]
+
+        if set(std_classes) == set(_non_leg_classes):
+            std_label = "Standard"
+        elif len(std_classes) == 1:
+            std_label = std_classes[0]
+        else:
+            std_label = " + ".join(std_classes)
+
+        if leg.empty or std.empty:
+            st.info("Select at least one non-Legendary classification to compare against.")
+        else:
+            stat_display = STAT_COLS + ["total_stat"]
+            leg_avg = leg[stat_display].mean()
+            std_avg = std[stat_display].mean()
+            labels = [STAT_LABELS[s] for s in stat_display]
+
+            x = np.arange(len(stat_display))
+            bar_w = 0.35
+
+            fig, ax = plt.subplots(figsize=(9, 4))
+            bars1 = ax.bar(x - bar_w / 2, [leg_avg[s] for s in stat_display], bar_w,
+                           label=f"Legendary / Mythical  (n={len(leg):,})", color="#9966CC")
+            bars2 = ax.bar(x + bar_w / 2, [std_avg[s] for s in stat_display], bar_w,
+                           label=f"{std_label}  (n={len(std):,})", color="#6688AA")
+            ax.bar_label(bars1, fmt="%.0f", padding=3, fontsize=7.5, color="#444")
+            ax.bar_label(bars2, fmt="%.0f", padding=3, fontsize=7.5, color="#444")
+            ax.set_xticks(x)
+            ax.set_xticklabels(labels, fontsize=9)
+            ax.set_ylabel("Average Base Stat")
+            ax.legend(fontsize=8)
+            ax.grid(axis="y", alpha=0.25)
+            fig.tight_layout()
+            st.pyplot(fig)
+            plt.close(fig)
+
+            gap_total = leg_avg["total_stat"] - std_avg["total_stat"]
+            biggest_gap_stat = max(STAT_COLS, key=lambda s: leg_avg[s] - std_avg[s])
+            biggest_gap_val  = leg_avg[biggest_gap_stat] - std_avg[biggest_gap_stat]
+
+            g1, g2, g3 = st.columns(3)
+            g1.metric("Total Stat Gap", f"+{gap_total:.0f}",
+                      help="Legendary/Mythical avg total minus comparison group avg total")
+            g2.metric("Widest Per-Stat Gap", STAT_LABELS[biggest_gap_stat],
+                      f"+{biggest_gap_val:.0f}")
+            g3.metric("Groups compared", f"{len(leg):,} vs {len(std):,}")
+
 # ── Pokémon Explorer ──────────────────────────────────────────────────────────
 
 with tab_explorer:
