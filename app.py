@@ -181,6 +181,72 @@ with tab_overview:
     plt.close(fig)
     st.caption("Top bar = primary type · Bottom bar (faded) = secondary type. Flying appears almost exclusively as a secondary type.")
 
+    with st.expander("Dual-type combination matrix"):
+        st.caption(
+            "Each cell shows how many Pokémon share that primary × secondary type combination. "
+            "Blank cells = no Pokémon with that pairing exists in the current filter."
+        )
+
+        all_types_sorted = sorted(df_long["type_name"].unique())
+        dual = filt_wide[filt_wide["type_2"].notna()][["type_1", "type_2", "id"]]
+
+        if dual.empty:
+            st.info("No dual-type Pokémon in the current filter.")
+        else:
+            combo_counts = (
+                dual.groupby(["type_1", "type_2"])["id"]
+                .nunique()
+                .reset_index(name="n")
+            )
+            matrix = (
+                combo_counts
+                .pivot(index="type_1", columns="type_2", values="n")
+                .reindex(index=all_types_sorted, columns=all_types_sorted, fill_value=0)
+                .fillna(0)
+                .astype(int)
+            )
+
+            diag_mask = np.eye(len(all_types_sorted), dtype=bool)
+            annot = matrix.copy().astype(object)
+            annot[matrix == 0] = ""
+
+            fig, ax = plt.subplots(figsize=(11, 9))
+            sns.heatmap(
+                matrix,
+                mask=diag_mask,
+                annot=annot,
+                fmt="",
+                cmap="Blues",
+                vmin=0,
+                linewidths=0.4,
+                linecolor="#eeeeee",
+                cbar_kws={"shrink": 0.6, "label": "Pokémon count"},
+                ax=ax,
+            )
+            ax.set_xlabel("Secondary Type", fontsize=9)
+            ax.set_ylabel("Primary Type", fontsize=9)
+            ax.tick_params(axis="x", labelsize=8, rotation=45)
+            ax.tick_params(axis="y", labelsize=8, rotation=0)
+            fig.tight_layout()
+            st.pyplot(fig)
+            plt.close(fig)
+
+            # Count missing combos (unordered — neither direction exists)
+            existing_unordered = set()
+            for _, row in combo_counts.iterrows():
+                existing_unordered.add(frozenset([row["type_1"], row["type_2"]]))
+            missing = [
+                f"{t1} / {t2}"
+                for i, t1 in enumerate(all_types_sorted)
+                for t2 in all_types_sorted[i + 1:]
+                if frozenset([t1, t2]) not in existing_unordered
+            ]
+            st.caption(
+                f"{len(missing)} type combinations have no Pokémon at all "
+                f"(in either order) for the current filter: "
+                + ", ".join(missing) + "."
+            )
+
 # ── Stats by Type ─────────────────────────────────────────────────────────────
 
 with tab_by_type:
@@ -426,6 +492,26 @@ with tab_analysis:
                 "correlation structure changes — for example, Dragon-types show much tighter "
                 "stat clustering than Bug-types."
             )
+
+    st.markdown("### Physical Dimensions vs Stats")
+    st.caption("Pearson r between a Pokémon's weight/height and its base stats.")
+
+    dims = filt_wide[["weight", "height"] + STAT_COLS + ["total_stat"]].dropna(subset=["weight", "height"])
+    if dims.empty:
+        st.info("No data for the current filter selection.")
+    else:
+        def _r(x, y):
+            return float(np.corrcoef(x, y)[0, 1])
+
+        d1, d2, d3, d4 = st.columns(4)
+        d1.metric("Weight × Defense",    f"r = {_r(dims['weight'], dims['defense']):.2f}")
+        d2.metric("Weight × HP",         f"r = {_r(dims['weight'], dims['hp']):.2f}")
+        d3.metric("Weight × Total",      f"r = {_r(dims['weight'], dims['total_stat']):.2f}")
+        d4.metric("Height × Total",      f"r = {_r(dims['height'], dims['total_stat']):.2f}")
+        st.caption(
+            "Heavier Pokémon tend to be bulkier and stronger overall, but the relationship is moderate — "
+            "weight is not a reliable proxy for power."
+        )
 
 # ── Pokémon Explorer ──────────────────────────────────────────────────────────
 
