@@ -324,3 +324,49 @@ def load_evolution_chain_for_pokemon(pokemon_id: int, engine=None) -> pd.DataFra
     """)
     with engine.connect() as conn:
         return pd.read_sql(query, conn, params={"pid": pokemon_id})
+
+
+def find_optimal_k(engine=None, k_max: int = 10) -> dict:
+    """
+    Compute KMeans inertia for k=2 through k_max.
+    Returns {k: inertia} — use to plot an elbow curve and choose k.
+    """
+    from sklearn.cluster import KMeans
+    from sklearn.preprocessing import StandardScaler
+
+    if engine is None:
+        engine = get_engine()
+    with engine.connect() as conn:
+        df = pd.read_sql(f"SELECT {', '.join(STAT_COLS)} FROM base_stats", conn)
+    X = StandardScaler().fit_transform(df[STAT_COLS])
+    return {
+        k: KMeans(n_clusters=k, random_state=42, n_init=10).fit(X).inertia_
+        for k in range(2, k_max + 1)
+    }
+
+
+def compute_stat_clusters(engine=None, k: int = 5) -> pd.DataFrame:
+    """
+    K-means cluster all Pokémon by their 6 base stats (StandardScaler normalized).
+    Returns DataFrame with columns: id, name, hp, attack, defense,
+    special_attack, special_defense, speed, cluster (int label 0..k-1).
+    """
+    from sklearn.cluster import KMeans
+    from sklearn.preprocessing import StandardScaler
+
+    if engine is None:
+        engine = get_engine()
+    with engine.connect() as conn:
+        df = pd.read_sql(
+            """
+            SELECT p.id, p.name,
+                   s.hp, s.attack, s.defense,
+                   s.special_attack, s.special_defense, s.speed
+            FROM pokemon p
+            JOIN base_stats s ON p.id = s.pokemon_id
+            """,
+            conn,
+        )
+    X = StandardScaler().fit_transform(df[STAT_COLS])
+    df["cluster"] = KMeans(n_clusters=k, random_state=42, n_init=10).fit_predict(X)
+    return df

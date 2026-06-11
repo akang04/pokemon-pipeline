@@ -10,6 +10,8 @@ from analyze import (
     STAT_COLS,
     STAT_LABELS,
     TYPE_COLORS,
+    compute_stat_clusters,
+    find_optimal_k,
     load_abilities_for_pokemon,
     load_evolution_chain_for_pokemon,
     load_moves_for_pokemon,
@@ -85,6 +87,167 @@ def get_moves(pokemon_id: int):
     return load_moves_for_pokemon(pokemon_id)
 
 
+@st.cache_data
+def get_elbow_data():
+    return find_optimal_k()
+
+
+@st.cache_data
+def get_cluster_data(k: int):
+    return compute_stat_clusters(k=k)
+
+
+def _label_archetypes(means: pd.DataFrame) -> dict:
+    """
+    Greedy rank-based assignment across 11 possible archetype labels.
+
+    Steps are ordered from most unambiguous (total-stat extremes) to most
+    specific (individual stat profiles). Each step claims exactly one cluster
+    and removes it from the pool, so no label can appear twice.
+
+    Steps 2-3 have normalized total-stat thresholds so they don't fire at low k
+    when there is no meaningful second tier or weak tier present.
+    Steps 4-5 score on defense/sp_def alone and require >= 0.45 normalized to fire.
+    Step 6 (HP Sponge) fires only when normalized HP reaches 0.55.
+    """
+    norm = (means - means.min()) / (means.max() - means.min()).replace(0, 1)
+    labels: dict = {}
+    remaining = list(norm.index)
+
+    def _pop(cid, label):
+        labels[cid] = label
+        remaining.remove(cid)
+
+    # 1. Legendary / Uber — highest total stat, always fires
+    _pop(norm.loc[remaining, "total_stat"].idxmax(), "Legendary / Uber")
+    if not remaining:
+        return labels
+
+    # 2. Early Stage — lowest total stat, only if clearly weak (normalized total <= 0.25)
+    bot = norm.loc[remaining, "total_stat"].idxmin()
+    if norm.loc[bot, "total_stat"] <= 0.25:
+        _pop(bot, "Early Stage")
+    if not remaining:
+        return labels
+
+    # 3. Mid-Stage — next lowest total stat, only if still below average (normalized total <= 0.35)
+    bot2 = norm.loc[remaining, "total_stat"].idxmin()
+    if norm.loc[bot2, "total_stat"] <= 0.35:
+        _pop(bot2, "Mid-Stage")
+    if not remaining:
+        return labels
+
+    # 4. Pseudo-Legendary — next highest total stat, only if clearly elevated (>= 0.75)
+    top = norm.loc[remaining, "total_stat"].idxmax()
+    if norm.loc[top, "total_stat"] >= 0.75:
+        _pop(top, "Pseudo-Legendary")
+    if not remaining:
+        return labels
+
+    # 5. Physical Wall — highest defense, gated on normalized defense >= 0.45
+    phys_bulk = norm.loc[remaining, "defense"]
+    wall_cid = phys_bulk.idxmax()
+    if norm.loc[wall_cid, "defense"] >= 0.45:
+        _pop(wall_cid, "Physical Wall")
+    if not remaining:
+        return labels
+
+    # 6. Special Wall — highest special_defense, gated on normalized sp_def >= 0.45
+    spec_bulk = norm.loc[remaining, "special_defense"]
+    swall_cid = spec_bulk.idxmax()
+    if norm.loc[swall_cid, "special_defense"] >= 0.45:
+        _pop(swall_cid, "Special Wall")
+    if not remaining:
+        return labels
+
+    # 7. HP Sponge — highest HP, gated on normalized hp >= 0.55
+    hp_cid = norm.loc[remaining, "hp"].idxmax()
+    if norm.loc[hp_cid, "hp"] >= 0.55:
+        _pop(hp_cid, "HP Sponge")
+    if not remaining:
+        return labels
+
+    # 8. Bulky Attacker — highest offense + bulk composite
+    bulky = norm.loc[remaining].apply(
+        lambda r: max(r["attack"], r["special_attack"]) * 0.5
+                  + (r["defense"] + r["special_defense"] + r["hp"]) / 3 * 0.5,
+        axis=1,
+    )
+    _pop(bulky.idxmax(), "Bulky Attacker")
+    if not remaining:
+        return labels
+
+    # 9. Physical Sweeper — highest attack × 0.6 + speed × 0.4
+    phys_sweep = norm.loc[remaining].apply(
+        lambda r: r["attack"] * 0.6 + r["speed"] * 0.4, axis=1
+    )
+    _pop(phys_sweep.idxmax(), "Physical Sweeper")
+    if not remaining:
+        return labels
+
+    # 10. Special Sweeper — highest special_attack × 0.6 + speed × 0.4
+    spec_sweep = norm.loc[remaining].apply(
+        lambda r: r["special_attack"] * 0.6 + r["speed"] * 0.4, axis=1
+    )
+    _pop(spec_sweep.idxmax(), "Special Sweeper")
+    if not remaining:
+        return labels
+
+    # 11. Balanced — fallback for all remaining clusters
+    for cid in remaining:
+        labels[cid] = "Balanced"
+
+    return labels
+
+
+_ARCHETYPE_CAPTIONS = {
+    "Legendary / Uber": (
+        "The power ceiling of the Pokémon world. Extreme base totals — box legendaries, "
+        "event Pokémon, and restricted-format Ubers. Examples: Mewtwo, Arceus, Zacian."
+    ),
+    "Early Stage": (
+        "Unevolved or first-form Pokémon designed to be raised and evolved. Low stats "
+        "across the board by design. Examples: Caterpie, Magikarp, Ralts, Pidgey."
+    ),
+    "Mid-Stage": (
+        "Middle-evolution Pokémon — past the weakest form but not fully realized. "
+        "Moderate balanced stats. Examples: Charmeleon, Haunter, Dragonair."
+    ),
+    "Pseudo-Legendary": (
+        "The strongest non-legendary fully-evolved species — 600 base total, slow to "
+        "raise, competitive staples. Examples: Dragonite, Tyranitar, Garchomp, Hydreigon."
+    ),
+    "Physical Wall": (
+        "Built to absorb physical hits. High Defense relative to other stats; typically "
+        "slow and low on offense. Examples: Shuckle, Cloyster, Steelix, Lugia."
+    ),
+    "Special Wall": (
+        "Specialized to resist special attacks — high Sp. Def, often paired with "
+        "recovery moves. Examples: Regice, Umbreon, Blissey (in Sp. Def role)."
+    ),
+    "HP Sponge": (
+        "Survives on raw bulk — enormous HP compensates for modest per-stat defenses. "
+        "Examples: Blissey, Chansey, Wailord, Snorlax."
+    ),
+    "Bulky Attacker": (
+        "The 'tank' role — strong offense with enough bulk to take a hit first. "
+        "Examples: Machamp, Conkeldurr, Hariyama."
+    ),
+    "Physical Sweeper": (
+        "Fast and hard-hitting on the physical side. High Attack + Speed; often frail. "
+        "Examples: Tauros, Weavile, Archeops, Greninja."
+    ),
+    "Special Sweeper": (
+        "Sp. Atk and Speed focused — the special glass cannon. "
+        "Examples: Gengar, Alakazam, Jolteon, Latios."
+    ),
+    "Balanced": (
+        "Well-rounded stat distributions without a dominant specialty. Versatile but "
+        "rarely optimal in any single dimension."
+    ),
+}
+
+
 df_long, df_wide = load_data()
 _class_df = load_classifications()
 df_wide = df_wide.merge(_class_df, on="id", how="left")
@@ -139,18 +302,20 @@ st.caption("Data sourced from PokéAPI · Phase 1: base stats, types, generation
 # Tabs
 # ---------------------------------------------------------------------------
 
-tab_overview, tab_by_type, tab_by_gen, tab_analysis, tab_explorer = st.tabs(
-    ["Overview", "Stats by Type", "Stats by Generation", "Analysis", "Pokémon Explorer"]
+tab_overview, tab_by_type, tab_by_gen, tab_analysis, tab_explorer, tab_archetypes = st.tabs(
+    ["Overview", "Stats by Type", "Stats by Generation", "Analysis", "Pokémon Explorer", "Archetypes"]
 )
 
 # ── Overview ─────────────────────────────────────────────────────────────────
 
 with tab_overview:
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2 = st.columns(2)
     c1.metric("Pokémon", f"{filt_wide['id'].nunique():,}")
-    c2.metric("Types",       filt_long["type_name"].nunique())
-    c3.metric("Generations", filt_wide["generation_name"].nunique())
-    c4.metric("Avg Total Stat", f"{filt_wide['total_stat'].mean():.0f}")
+    c2.metric("Avg Total Stat", f"{filt_wide['total_stat'].mean():.0f}")
+    st.caption(
+        f"{filt_long['type_name'].nunique()} types · "
+        f"{filt_wide['generation_name'].nunique()} generations in current filter"
+    )
 
     st.markdown("### Pokémon count by type — primary vs secondary")
 
@@ -250,11 +415,9 @@ with tab_overview:
 # ── Stats by Type ─────────────────────────────────────────────────────────────
 
 with tab_by_type:
-    st.markdown("### Average base stats by type")
+    st.markdown("### Base stat distribution by type")
 
-    sbt = stats_by_type(filt_long)
-
-    if sbt.empty:
+    if filt_long.empty:
         st.info("No data for the current filter selection.")
     else:
         rank_stat = st.selectbox(
@@ -265,22 +428,41 @@ with tab_by_type:
             key="type_rank_stat",
         )
 
-        ranked = sbt[[rank_stat]].sort_values(rank_stat, ascending=True)
-        bar_colors = [TYPE_COLORS.get(t, "#888888") for t in ranked.index]
+        medians = filt_long.groupby("type_name")[rank_stat].median().sort_values(ascending=True)
+        sorted_types = medians.index.tolist()
+        box_data = [
+            filt_long[filt_long["type_name"] == t][rank_stat].dropna().values
+            for t in sorted_types
+        ]
+        box_colors = [TYPE_COLORS.get(t, "#888888") for t in sorted_types]
 
-        fig, ax = plt.subplots(figsize=(7, max(4, len(ranked) * 0.45)))
-        bars = ax.barh(ranked.index, ranked[rank_stat], color=bar_colors, edgecolor="white")
-        ax.bar_label(bars, fmt="%.1f", padding=4, fontsize=8)
-        ax.set_xlabel(f"Avg {STAT_LABELS[rank_stat]}")
-        ax.set_xlim(0, ranked[rank_stat].max() * 1.15)
+        fig, ax = plt.subplots(figsize=(7, max(4, len(sorted_types) * 0.55)))
+        bp = ax.boxplot(
+            box_data,
+            vert=False,
+            patch_artist=True,
+            widths=0.6,
+            medianprops=dict(color="#333333", linewidth=2),
+            whiskerprops=dict(color="#888888", linewidth=1),
+            capprops=dict(color="#888888", linewidth=1),
+            flierprops=dict(marker=".", markersize=3, alpha=0.35, color="#888888"),
+        )
+        for patch, color in zip(bp["boxes"], box_colors):
+            patch.set_facecolor(color)
+            patch.set_alpha(0.65)
+        ax.set_yticks(range(1, len(sorted_types) + 1))
+        ax.set_yticklabels(sorted_types, fontsize=9)
+        ax.set_xlabel(STAT_LABELS[rank_stat])
         ax.grid(axis="x", alpha=0.2)
-        ax.tick_params(axis="y", labelsize=9)
         fig.tight_layout()
         st.pyplot(fig)
         plt.close(fig)
+        st.caption(
+            "Box = 25th–75th percentile; line = median; whiskers extend to 1.5× IQR; dots = outliers. "
+            "Dual-type Pokémon count toward both types."
+        )
 
-        st.caption("Dual-type Pokémon count toward both types.")
-
+        sbt = stats_by_type(filt_long)
         col_rename = {c: STAT_LABELS[c] for c in sbt.columns}
         sbt_display = sbt.rename(columns=col_rename)
         sbt_norm = (sbt_display - sbt_display.min()) / (sbt_display.max() - sbt_display.min()).replace(0, 1)
@@ -305,9 +487,6 @@ with tab_by_type:
             fig2.tight_layout()
             st.pyplot(fig2)
             plt.close(fig2)
-
-        with st.expander("Show raw table"):
-            st.dataframe(sbt_display, use_container_width=True)
 
 # ── Stats by Generation ───────────────────────────────────────────────────────
 
@@ -374,7 +553,7 @@ with tab_by_gen:
                     zorder=2,
                 )
 
-            # Annotate each point only when a single stat is selected
+            # Annotate each point and add OLS trend line when a single stat is selected
             if len(stat_choice) == 1:
                 stat = stat_choice[0]
                 for _, row in sbg.iterrows():
@@ -386,6 +565,18 @@ with tab_by_gen:
                         ha="center", va="bottom",
                         fontsize=7.5, color="#444444",
                     )
+                x_num = np.arange(len(sbg))
+                m, b = np.polyfit(x_num, sbg[stat].values, 1)
+                ax.plot(
+                    sbg["gen_label"],
+                    m * x_num + b,
+                    "--",
+                    color="#888888",
+                    linewidth=1.5,
+                    alpha=0.7,
+                    zorder=3,
+                    label=f"Trend ({m:+.1f}/gen)",
+                )
 
             ax.set_xlabel("Generation")
             ax.set_ylabel("Average Base Stat")
@@ -493,24 +684,14 @@ with tab_analysis:
                 "stat clustering than Bug-types."
             )
 
-    st.markdown("### Physical Dimensions vs Stats")
-    st.caption("Pearson r between a Pokémon's weight/height and its base stats.")
-
-    dims = filt_wide[["weight", "height"] + STAT_COLS + ["total_stat"]].dropna(subset=["weight", "height"])
-    if dims.empty:
-        st.info("No data for the current filter selection.")
-    else:
-        def _r(x, y):
-            return float(np.corrcoef(x, y)[0, 1])
-
-        d1, d2, d3, d4 = st.columns(4)
-        d1.metric("Weight × Defense",    f"r = {_r(dims['weight'], dims['defense']):.2f}")
-        d2.metric("Weight × HP",         f"r = {_r(dims['weight'], dims['hp']):.2f}")
-        d3.metric("Weight × Total",      f"r = {_r(dims['weight'], dims['total_stat']):.2f}")
-        d4.metric("Height × Total",      f"r = {_r(dims['height'], dims['total_stat']):.2f}")
+    _dims = filt_wide[["weight", "total_stat", "defense"]].dropna()
+    if not _dims.empty:
+        _r_wt = float(np.corrcoef(_dims["weight"], _dims["total_stat"])[0, 1])
+        _r_wd = float(np.corrcoef(_dims["weight"], _dims["defense"])[0, 1])
         st.caption(
-            "Heavier Pokémon tend to be bulkier and stronger overall, but the relationship is moderate — "
-            "weight is not a reliable proxy for power."
+            f"Physical size also correlates with power: weight × total r = {_r_wt:.2f}, "
+            f"weight × defense r = {_r_wd:.2f}. "
+            f"Heavier Pokémon tend to be bulkier, but size is not a reliable proxy for strength."
         )
 
     st.markdown("### Legendary / Mythical vs. Standard Pokémon")
@@ -741,3 +922,127 @@ with tab_explorer:
                     )
     else:
         st.info("No Pokémon match the current search/filter.")
+
+# ── Archetypes ────────────────────────────────────────────────────────────────
+
+with tab_archetypes:
+    st.markdown("### Pokémon Stat Archetypes")
+    st.caption(
+        "K-means clusters all 1,025 Pokémon by their six base stats (StandardScaler normalized). "
+        "Sidebar filters do not apply here — clustering always uses the full dataset so cluster "
+        "membership is stable regardless of the current filter selection."
+    )
+
+    st.markdown("#### Elbow Curve — why k = 10")
+    st.caption(
+        "Inertia measures total within-cluster variance. The dashed line marks k = 10, where the "
+        "curve flattens — adding more clusters beyond this point yields diminishing returns."
+    )
+    elbow = get_elbow_data()
+    fig, ax = plt.subplots(figsize=(7, 3))
+    ax.plot(list(elbow.keys()), list(elbow.values()), marker="o", linewidth=2, color="#5566AA")
+    ax.axvline(x=10, color="#CC4444", linestyle="--", linewidth=1.5, alpha=0.75, label="k = 10 (chosen)")
+    ax.set_xlabel("k (number of clusters)")
+    ax.set_ylabel("Inertia")
+    ax.set_xticks(list(elbow.keys()))
+    ax.legend(fontsize=8)
+    ax.grid(alpha=0.3)
+    fig.tight_layout()
+    st.pyplot(fig)
+    plt.close(fig)
+
+    # Always use k=10 — archetype labels are calibrated for this value
+    _K = 10
+    cluster_df = get_cluster_data(_K).copy()
+    cluster_df["total_stat"] = cluster_df[STAT_COLS].sum(axis=1)
+
+    means = cluster_df.groupby("cluster")[STAT_COLS + ["total_stat"]].mean().round(1)
+    archetype_labels = _label_archetypes(means)
+    cluster_df["archetype"] = cluster_df["cluster"].map(archetype_labels)
+
+    # Normalize per-stat across archetypes for radar chart
+    means_norm = (means[STAT_COLS] - means[STAT_COLS].min()) / (
+        means[STAT_COLS].max() - means[STAT_COLS].min()
+    ).replace(0, 1)
+
+    st.markdown("#### Stat profile radar — compare archetypes")
+    st.caption(
+        "Each polygon shows a cluster's normalized stat profile. Stats are scaled 0–1 relative "
+        "to the min/max across all archetypes — a larger polygon means dominant in that stat."
+    )
+
+    _all_arch_labels = [archetype_labels[i] for i in sorted(archetype_labels.keys())]
+    _selected_arch = st.multiselect(
+        "Archetypes to overlay",
+        options=_all_arch_labels,
+        default=_all_arch_labels,
+        key="arch_radar_select",
+    )
+
+    if _selected_arch:
+        _label_to_cid = {v: k for k, v in archetype_labels.items()}
+        _N = len(STAT_COLS)
+        _angles = np.linspace(0, 2 * np.pi, _N, endpoint=False).tolist()
+        _angles += _angles[:1]
+
+        fig, ax = plt.subplots(figsize=(6, 6), subplot_kw=dict(polar=True))
+        _tab10 = plt.cm.tab10.colors
+        for _arch in _selected_arch:
+            _cid = _label_to_cid[_arch]
+            _vals = [means_norm.loc[_cid, s] for s in STAT_COLS]
+            _vals += _vals[:1]
+            ax.plot(_angles, _vals, color=_tab10[_cid % 10], linewidth=2, label=_arch)
+            ax.fill(_angles, _vals, color=_tab10[_cid % 10], alpha=0.08)
+        ax.set_xticks(_angles[:-1])
+        ax.set_xticklabels([STAT_LABELS[s] for s in STAT_COLS], fontsize=9)
+        ax.set_ylim(0, 1)
+        ax.set_yticks([0.25, 0.5, 0.75])
+        ax.set_yticklabels(["25%", "50%", "75%"], fontsize=7)
+        ax.legend(loc="upper right", bbox_to_anchor=(1.4, 1.15), fontsize=8, framealpha=0.8)
+        ax.grid(alpha=0.3)
+        fig.tight_layout()
+        st.pyplot(fig)
+        plt.close(fig)
+
+    st.markdown("#### Average stats per archetype")
+    display_means = means.copy()
+    display_means.index = [
+        f"Cluster {i} — {archetype_labels[i]}" for i in display_means.index
+    ]
+    display_means.columns = [STAT_LABELS.get(c, c) for c in display_means.columns]
+    st.dataframe(display_means, use_container_width=True)
+
+    st.markdown("#### Archetype descriptions")
+    for _cid in sorted(archetype_labels.keys()):
+        _label = archetype_labels[_cid]
+        _caption = _ARCHETYPE_CAPTIONS.get(_label, "")
+        st.markdown(f"**{_label}** — {_caption}")
+
+    st.markdown("#### Pokémon by archetype")
+    _arch_filter = st.multiselect(
+        "Filter by archetype",
+        options=sorted(cluster_df["archetype"].unique()),
+        default=sorted(cluster_df["archetype"].unique()),
+        key="arch_pokemon_filter",
+    )
+    _search_arch = st.text_input(
+        "Search by name", placeholder="e.g. char, snorlax", key="arch_name_search"
+    )
+
+    _show_df = cluster_df[cluster_df["archetype"].isin(_arch_filter)].copy()
+    if _search_arch:
+        _show_df = _show_df[
+            _show_df["name"].str.contains(_search_arch.strip(), case=False, na=False)
+        ]
+
+    _show_df = (
+        _show_df[["id", "name", "archetype"] + STAT_COLS + ["total_stat"]]
+        .sort_values("total_stat", ascending=False)
+        .reset_index(drop=True)
+        .rename(columns={
+            "id": "#", "name": "Name", "archetype": "Archetype",
+            **{c: STAT_LABELS[c] for c in STAT_COLS + ["total_stat"]},
+        })
+    )
+    st.dataframe(_show_df, use_container_width=True, hide_index=True, height=400)
+    st.caption(f"{len(_show_df):,} Pokémon shown")
