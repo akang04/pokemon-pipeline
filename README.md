@@ -147,13 +147,21 @@ venv\Scripts\streamlit.exe run app.py
 
 **Stats by Type** — horizontal box plots per type sorted by median of the selected stat, coloured by type. Shows the full distribution rather than just the mean — high-variance types like Dragon have a wide spread driven by outlier Legendaries, while Fairy and Steel show tighter baselines. An expandable heatmap shows all six stats simultaneously with relative-rank normalisation.
 
+![Stats by Type — box plot distribution](docs/screenshot_type_boxplot.png)
+
 **Stats by Generation** — multi-stat line chart across generations with muted count bars on a secondary axis. Single-stat mode adds per-point value annotations and a dashed OLS regression trend line with slope annotated (e.g. `Trend (+5.4/gen)`), directly quantifying power creep rather than leaving it as a visual inference.
 
+![Stats by Generation — OLS trend line](docs/screenshot_gen_regression.png)
+
 **Analysis** — (1) lower-triangular Pearson correlation heatmap for the six base stats, with key findings as metrics and a note on weight-based correlations; (2) **Legendary / Mythical vs. Standard** grouped bar chart comparing average stats for legendaries against any user-selected classification subset — the Classification filter controls which standard group is shown while the Legendary/Mythical group is always fixed.
+
+![Analysis — base stat correlation heatmap](docs/screenshot_correlation.png)
 
 **Pokémon Explorer** — searchable, sortable table of all Pokémon in the current filter. Selecting a Pokémon shows a full profile: sprite, type/gen metrics, stat bar chart, abilities with effect text, evolution chain with sprites, and move learnset grouped by learn method (Level Up, TM/HM, Egg, Tutor).
 
 **Archetypes** — clustering always uses the full 1,025-Pokémon dataset regardless of sidebar filters, so cluster membership is stable. Shows: (1) elbow curve with k = 10 marked, (2) radar chart of normalised stat profiles per archetype with a multiselect to overlay specific archetypes for comparison, (3) average stats table, (4) plain-English description for each archetype, (5) filterable and name-searchable Pokémon list showing which Pokémon belong to each cluster.
+
+![Archetypes — radar chart and filterable Pokémon list](docs/screenshot_archetypes.png)
 
 ---
 
